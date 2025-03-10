@@ -278,3 +278,4 @@ if __name__ == '__main__':
     
     # Start the Discord bot
     client.run(TOKEN)
+    bot.run(TOKEN)
