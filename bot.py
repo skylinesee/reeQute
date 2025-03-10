@@ -119,16 +119,11 @@ async def send_verification_dm(username, code):
     except Exception as e:
         logger.error(f"Error sending DM to {username}: {e}")
 
-# Health check endpoint for Railway
-@app.route('/', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'healthy', 'bot_connected': client.is_ready()})
+        
 
 # Run the Flask app in a separate thread
 def run_flask():
-    # Use PORT environment variable for Railway compatibility
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=5000)
 
 if __name__ == '__main__':
     # Start the Flask server in a separate thread
@@ -136,10 +131,9 @@ if __name__ == '__main__':
     flask_thread.daemon = True
     flask_thread.start()
     
-    # Get token from environment variable
+    # Set your token here
+    import os
     TOKEN = os.environ.get("DISCORD_TOKEN")
-    if not TOKEN:
-        logger.error("Error: No Discord token found. Set the DISCORD_TOKEN environment variable.")
-    else:
-        # Start the Discord bot
-        client.run(TOKEN)
+    
+    # Start the Discord bot
+    client.run(TOKEN)
