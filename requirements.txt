@@ -1,3 +1,5 @@
 discord.py>=2.0.0
 flask==2.3.3
 gunicorn==21.2.0
+gevent
+gevent-websocket
