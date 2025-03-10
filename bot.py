@@ -156,7 +156,7 @@ logger = logging.getLogger(__name__)
 intents = discord.Intents.default()
 intents.message_content = True  # Privileged intent
 intents.members = True          # Privileged intent - needed to access guild members
-client = discord.Client(intents=intents)
+bot = discord.bot(intents=intents)
 
 # Flask app setup
 app = Flask(__name__)
@@ -168,13 +168,13 @@ verification_codes = {}
 def generate_code(length=6):
     return ''.join(random.choices(string.digits, k=length))
 
-@client.event
+@bot.event
 async def on_ready():
-    logger.info(f'Bot logged in as {client.user}')
-    logger.info(f'Bot is in {len(client.guilds)} guilds')
+    logger.info(f'Bot logged in as {bot.user}')
+    logger.info(f'Bot is in {len(bot.guilds)} guilds')
     
     # Log the names of the guilds the bot is in
-    for guild in client.guilds:
+    for guild in bot.guilds:
         logger.info(f'- {guild.name} (id: {guild.id})')
         logger.info(f'  Member count: {guild.member_count}')
 
@@ -192,7 +192,7 @@ def request_verification():
     verification_codes[username] = code
     
     # Schedule the DM to be sent
-    asyncio.run_coroutine_threadsafe(send_verification_dm(username, code), client.loop)
+    asyncio.run_coroutine_threadsafe(send_verification_dm(username, code), bot.loop)
     
     return jsonify({'success': True, 'message': 'Verification code sent'})
 
@@ -229,7 +229,7 @@ async def send_verification_dm(username, code):
         if '#' in username:
             name, discriminator = username.split('#')
             logger.info(f"Looking for user with name: {name} and discriminator: {discriminator}")
-            for guild in client.guilds:
+            for guild in bot.guilds:
                 for member in guild.members:
                     if member.name.lower() == name.lower() and member.discriminator == discriminator:
                         user = member
@@ -240,7 +240,7 @@ async def send_verification_dm(username, code):
         else:
             # Try to find by username only (less reliable)
             logger.info(f"Looking for user with name: {username} (no discriminator)")
-            for guild in client.guilds:
+            for guild in bot.guilds:
                 for member in guild.members:
                     if member.name.lower() == username.lower():
                         user = member
@@ -277,5 +277,4 @@ if __name__ == '__main__':
     TOKEN = os.environ.get("DISCORD_TOKEN")
     
     # Start the Discord bot
-    client.run(TOKEN)
     bot.run(TOKEN)
