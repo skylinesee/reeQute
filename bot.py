@@ -29,27 +29,7 @@ intents.members = True          # Privileged intent - needed to access guild mem
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 
-class MyHelpCommand(commands.DefaultHelpCommand):
-    async def send_bot_help(self, mapping):
-        # Ana komutları göster
-        embed = discord.Embed(title="Commands", description="All the Commands!", color=discord.Color.blue())
-        for cog, commands in mapping.items():
-            command_list = [command.name for command in commands if not command.hidden]
-            if command_list:
-                embed.add_field(name=cog.qualified_name if cog else "Main Commands", value="\n".join(command_list), inline=False)
-        channel = self.context.channel
-        await channel.send(embed=embed)
 
-    async def send_command_help(self, command):
-        # Tek bir komut hakkında bilgi
-        embed = discord.Embed(title=f"{command.name} Command", description=command.help or "Nothing.", color=discord.Color.green())
-        await self.context.send(embed=embed)
-
-    async def send_cog_help(self, cog):
-        # Belirli bir cog hakkında bilgi
-        embed = discord.Embed(title=f"{cog.qualified_name} Komutları", description="Bu cog altında yer alan komutlar", color=discord.Color.orange())
-        for command in cog.get_commands():
-            embed.add_field(name=command.name, value=command.help or "Açıklama yok.", inline=False)
 
 
 # Flask API endpoints
@@ -136,16 +116,57 @@ def run_flask():
     app.run(host='0.0.0.0', port=5000)
 
 # Botun varsayılan yardım komutunu değiştirme
-bot.help_command = MyHelpCommand()  # Yardım komutunu özelleştirme
+class MyHelpCommand(commands.DefaultHelpCommand):
+    async def send_bot_help(self, mapping):
+        # Show main commands
+        embed = discord.Embed(title="Bot Commands", description="Check out the bot commands!", color=discord.Color.blue())
+        for cog, commands in mapping.items():
+            command_list = [command.name for command in commands if not command.hidden]
+            if command_list:
+                embed.add_field(name=cog.qualified_name if cog else "Main Commands", value="\n".join(command_list), inline=False)
+        channel = self.context.channel
+        await channel.send(embed=embed)
+
+    async def send_command_help(self, command):
+        # Information about a single command
+        embed = discord.Embed(title=f"{command.name} Command", description=command.help or "No description.", color=discord.Color.green())
+        await self.context.send(embed=embed)
+
+    async def send_cog_help(self, cog):
+        # Information about a specific cog
+        embed = discord.Embed(title=f"{cog.qualified_name} Commands", description="Commands under this cog", color=discord.Color.orange())
+        for command in cog.get_commands():
+            embed.add_field(name=command.name, value=command.help or "No description.", inline=False)
+        await self.context.send(embed=embed)
+
+# Set the custom help command
+bot.help_command = MyHelpCommand()
+
+# Bot's on_ready event (when bot is ready)
+@bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
-    # idle
+    # Set the bot's presence (status)
     await bot.change_presence(activity=discord.Game(name="!help for commands"))
 
+# Ping command
 @bot.command()
 async def ping(ctx):
-    """Ping Command!"""
+    """Ping command!"""
     await ctx.send('Pong!')
+
+# Roll command
+@bot.command()
+async def roll(ctx, dice: str):
+    """Roll a dice! Example usage: !roll 2d6"""
+    await ctx.send(f'Rolled dice result: {dice}')
+
+# Profile command
+@bot.command()
+async def profile(ctx, member: discord.Member = None):
+    """Shows a user's profile picture."""
+    member = member or ctx.author  # Use the provided member or the command author
+    await ctx.send(member.avatar.url)
 
 
 if __name__ == '__main__':
