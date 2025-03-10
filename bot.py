@@ -28,6 +28,29 @@ intents.message_content = True  # Privileged intent
 intents.members = True          # Privileged intent - needed to access guild members
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+class MyHelpCommand(commands.DefaultHelpCommand):
+    async def send_bot_help(self, mapping):
+        # Ana komutları göster
+        embed = discord.Embed(title="Bot Komutları", description="Bot komutlarına göz atın!", color=discord.Color.blue())
+        for cog, commands in mapping.items():
+            command_list = [command.name for command in commands if not command.hidden]
+            if command_list:
+                embed.add_field(name=cog.qualified_name if cog else "Ana Komutlar", value="\n".join(command_list), inline=False)
+        channel = self.context.channel
+        await channel.send(embed=embed)
+
+    async def send_command_help(self, command):
+        # Tek bir komut hakkında bilgi
+        embed = discord.Embed(title=f"{command.name} Komutu", description=command.help or "Açıklama yok.", color=discord.Color.green())
+        await self.context.send(embed=embed)
+
+    async def send_cog_help(self, cog):
+        # Belirli bir cog hakkında bilgi
+        embed = discord.Embed(title=f"{cog.qualified_name} Komutları", description="Bu cog altında yer alan komutlar", color=discord.Color.orange())
+        for command in cog.get_commands():
+            embed.add_field(name=command.name, value=command.help or "Açıklama yok.", inline=False)
+bot.help_command = MyHelpCommand()
+
 # Flask API endpoints
 @app.route('/api/verification/request', methods=['POST'])
 def request_verification():
@@ -113,11 +136,17 @@ def run_flask():
 
 @bot.event
 async def on_ready():
-    logger.info(f'Bot logged in as {bot.user}')
-    logger.info(f'Bot is in {len(bot.guilds)} guilds')
+    print(f'Logged in as {bot.user}')
 
-    # Set bot status
-    await bot.change_presence(activity=discord.Game(name="!help for commands"))
+@bot.command()
+async def ping(ctx):
+    """Ping komutu!"""
+    await ctx.send('Pong!')
+
+@bot.command()
+async def roll(ctx, dice: str):
+    """Zar atma komutu! Örnek kullanım: !roll 2d6"""
+    await ctx.send(f'Atılan zar sonucu: {dice}')
 
 if __name__ == '__main__':
     # Start Flask in a separate thread
