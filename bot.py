@@ -32,17 +32,17 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 class MyHelpCommand(commands.DefaultHelpCommand):
     async def send_bot_help(self, mapping):
         # Ana komutları göster
-        embed = discord.Embed(title="Bot Komutları", description="Bot komutlarına göz atın!", color=discord.Color.blue())
+        embed = discord.Embed(title="Commands", description="All the Commands!", color=discord.Color.blue())
         for cog, commands in mapping.items():
             command_list = [command.name for command in commands if not command.hidden]
             if command_list:
-                embed.add_field(name=cog.qualified_name if cog else "Ana Komutlar", value="\n".join(command_list), inline=False)
+                embed.add_field(name=cog.qualified_name if cog else "Main Commands", value="\n".join(command_list), inline=False)
         channel = self.context.channel
         await channel.send(embed=embed)
 
     async def send_command_help(self, command):
         # Tek bir komut hakkında bilgi
-        embed = discord.Embed(title=f"{command.name} Komutu", description=command.help or "Açıklama yok.", color=discord.Color.green())
+        embed = discord.Embed(title=f"{command.name} Command", description=command.help or "Nothing.", color=discord.Color.green())
         await self.context.send(embed=embed)
 
     async def send_cog_help(self, cog):
@@ -137,19 +137,16 @@ def run_flask():
 
 # Botun varsayılan yardım komutunu değiştirme
 bot.help_command = MyHelpCommand()  # Yardım komutunu özelleştirme
-@bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
+    # idle
+    await bot.change_presence(activity=discord.Game(name="!help for commands"))
 
 @bot.command()
 async def ping(ctx):
-    """Ping komutu!"""
+    """Ping Command!"""
     await ctx.send('Pong!')
 
-@bot.command()
-async def roll(ctx, dice: str):
-    """Zar atma komutu! Örnek kullanım: !roll 2d6"""
-    await ctx.send(f'Atılan zar sonucu: {dice}')
 
 if __name__ == '__main__':
     # Start Flask in a separate thread
