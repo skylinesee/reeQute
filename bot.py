@@ -5,30 +5,8 @@ import asyncio
 import os
 from flask import Flask, request, jsonify
 from threading import Thread
-from datetime import datetime
-from discord.ext import commands
 import logging
-
-# Discord bot intents
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-
-# Create bot instance
-bot = commands.Bot(command_prefix='!', intents=intents)
-
-# Event: Bot is ready
-@bot.event
-async def on_ready():
-    print(f'Bot is logged in as {bot.user}')
-    print(f'Bot is in {len(bot.guilds)} servers')
-    await bot.change_presence(activity=discord.Game(name="!help for commands"))
-
-# Command: Ping
-@bot.command()
-async def ping(ctx):
-    latency = round(bot.latency * 1000)
-    await ctx.send(f'Pong! Latency: {latency}ms')
+from discord.ext import commands
 
 # Flask app setup
 app = Flask(__name__)
@@ -36,23 +14,36 @@ app = Flask(__name__)
 # Store verification codes
 verification_codes = {}
 
+# Generate a random verification code
 def generate_code(length=6):
     return ''.join(random.choices(string.digits, k=length))
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Discord bot setup with PROPER INTENTS
+intents = discord.Intents.default()
+intents.message_content = True  # Privileged intent
+intents.members = True          # Privileged intent - needed to access guild members
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Flask API endpoints
 @app.route('/api/verification/request', methods=['POST'])
 def request_verification():
     data = request.json
     username = data.get('discordUsername')
-
+    
     if not username:
         return jsonify({'success': False, 'message': 'Discord username is required'}), 400
-
+    
+    # Generate a verification code
     code = generate_code()
     verification_codes[username] = code
-
+    
     # Schedule the DM to be sent
     asyncio.run_coroutine_threadsafe(send_verification_dm(username, code), bot.loop)
-
+    
     return jsonify({'success': True, 'message': 'Verification code sent'})
 
 @app.route('/api/verification/verify', methods=['POST'])
@@ -60,16 +51,17 @@ def verify_code():
     data = request.json
     username = data.get('discordUsername')
     code = data.get('code')
-
+    
     if not username or not code:
         return jsonify({'success': False, 'message': 'Username and code are required'}), 400
-
+    
     stored_code = verification_codes.get(username)
-
+    
     if not stored_code:
         return jsonify({'success': False, 'message': 'No verification code found for this user'}), 400
-
+    
     if code == stored_code:
+        # Remove the code after successful verification
         verification_codes.pop(username)
         return jsonify({'success': True, 'message': 'Verification successful'})
     else:
@@ -78,30 +70,63 @@ def verify_code():
 async def send_verification_dm(username, code):
     try:
         user = None
-        for guild in bot.guilds:
-            for member in guild.members:
-                if f"{member.name}#{member.discriminator}" == username:
-                    user = member
+        logger.info(f"Attempting to find user: {username}")
+        
+        # Check if username includes discriminator (e.g., username#1234)
+        if '#' in username:
+            name, discriminator = username.split('#')
+            logger.info(f"Looking for user with name: {name} and discriminator: {discriminator}")
+            for guild in bot.guilds:
+                for member in guild.members:
+                    if member.name.lower() == name.lower() and member.discriminator == discriminator:
+                        user = member
+                        logger.info(f"Found user in guild: {guild.name}")
+                        break
+                if user:
                     break
-            if user:
-                break
-
+        else:
+            # Try to find by username only (less reliable)
+            logger.info(f"Looking for user with name: {username} (no discriminator)")
+            for guild in bot.guilds:
+                for member in guild.members:
+                    if member.name.lower() == username.lower():
+                        user = member
+                        logger.info(f"Found user in guild: {guild.name}")
+                        break
+                if user:
+                    break
+        
         if not user:
-            print(f"Could not find user: {username}")
+            logger.error(f"Could not find user: {username}")
             return
-
-        await user.send(f"Your verification code is: **{code}**")
-        print(f"Verification code sent to {username}")
+        
+        # Send the DM
+        logger.info(f"Sending verification code to user: {user.name}")
+        await user.send(f"Your verification code is: **{code}**\nPlease enter this code in the application to complete verification.")
+        logger.info(f"Verification code sent to {username}")
     except Exception as e:
-        print(f"Error sending DM to {username}: {e}")
+        logger.error(f"Error sending DM to {username}: {e}")
 
+# Run Flask in a separate thread
 def run_flask():
     app.run(host='0.0.0.0', port=5000)
 
+@bot.event
+async def on_ready():
+    logger.info(f'Bot logged in as {bot.user}')
+    logger.info(f'Bot is in {len(bot.guilds)} guilds')
+
+    # Set bot status
+    await bot.change_presence(activity=discord.Game(name="!help for commands"))
+
 if __name__ == '__main__':
+    # Start Flask in a separate thread
     flask_thread = Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
 
+    # Set your token here
     TOKEN = os.environ.get("DISCORD_TOKEN")
+    
+    # Start the Discord bot
     bot.run(TOKEN)
