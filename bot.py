@@ -28,6 +28,7 @@ intents.message_content = True  # Privileged intent
 intents.members = True          # Privileged intent - needed to access guild members
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+
 class MyHelpCommand(commands.DefaultHelpCommand):
     async def send_bot_help(self, mapping):
         # Ana komutları göster
@@ -49,7 +50,7 @@ class MyHelpCommand(commands.DefaultHelpCommand):
         embed = discord.Embed(title=f"{cog.qualified_name} Komutları", description="Bu cog altında yer alan komutlar", color=discord.Color.orange())
         for command in cog.get_commands():
             embed.add_field(name=command.name, value=command.help or "Açıklama yok.", inline=False)
-bot.help_command = MyHelpCommand()
+
 
 # Flask API endpoints
 @app.route('/api/verification/request', methods=['POST'])
@@ -134,6 +135,8 @@ async def send_verification_dm(username, code):
 def run_flask():
     app.run(host='0.0.0.0', port=5000)
 
+# Botun varsayılan yardım komutunu değiştirme
+bot.help_command = MyHelpCommand()  # Yardım komutunu özelleştirme
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
