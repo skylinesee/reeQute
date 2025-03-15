@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from threading import Thread
 import logging
 from discord.ext import commands
+from datetime import datetime, timedelta
 
 # Flask app setup
 app = Flask(__name__)
@@ -61,15 +62,35 @@ def verify_code():
         return jsonify({'success': False, 'message': 'Username and code are required'}), 400
     
     # Check if user has temporary access
-    for user_id, expiry in temp_access.items():
-        user = None
-        for guild in bot.guilds:
-            user = guild.get_member(int(user_id))
-            if user and user.name.lower() == username.lower():
-                if time.time() < expiry:
-                    # User has temporary access
-                    return jsonify({'success': True, 'message': 'Verification successful (temporary access)'})
+    user_id = None
+    expiry_time = None
     
+    # Find the user ID based on username
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.name.lower() == username.lower():
+                user_id = str(member.id)
+                break
+        if user_id:
+            break
+    
+    # Check if user has temporary access
+    if user_id and user_id in temp_access:
+        expiry_time = temp_access[user_id]
+        if time.time() < expiry_time:
+            # User has temporary access
+            # Calculate remaining time in minutes
+            remaining_minutes = int((expiry_time - time.time()) / 60)
+            
+            return jsonify({
+                'success': True, 
+                'message': 'Verification successful (temporary access)',
+                'temporary': True,
+                'expiresIn': remaining_minutes,
+                'expiryTimestamp': expiry_time
+            })
+    
+    # Check regular verification code
     stored_code = verification_codes.get(username)
     
     if not stored_code:
@@ -78,9 +99,57 @@ def verify_code():
     if code == stored_code:
         # Remove the code after successful verification
         verification_codes.pop(username)
-        return jsonify({'success': True, 'message': 'Verification successful'})
+        return jsonify({
+            'success': True, 
+            'message': 'Verification successful',
+            'temporary': False
+        })
     else:
         return jsonify({'success': False, 'message': 'Invalid verification code'}), 400
+
+# New endpoint to check temporary access status
+@app.route('/api/verification/check-status', methods=['POST'])
+def check_status():
+    data = request.json
+    username = data.get('discordUsername')
+    
+    if not username:
+        return jsonify({'success': False, 'message': 'Discord username is required'}), 400
+    
+    # Find the user ID based on username
+    user_id = None
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.name.lower() == username.lower():
+                user_id = str(member.id)
+                break
+        if user_id:
+            break
+    
+    if not user_id:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+    
+    # Check if user has temporary access
+    if user_id in temp_access:
+        expiry_time = temp_access[user_id]
+        if time.time() < expiry_time:
+            # User has temporary access
+            # Calculate remaining time in minutes
+            remaining_minutes = int((expiry_time - time.time()) / 60)
+            
+            return jsonify({
+                'success': True, 
+                'message': 'User has temporary access',
+                'temporary': True,
+                'expiresIn': remaining_minutes,
+                'expiryTimestamp': expiry_time
+            })
+        else:
+            # Temporary access has expired
+            del temp_access[user_id]
+            return jsonify({'success': False, 'message': 'Temporary access has expired'})
+    
+    return jsonify({'success': False, 'message': 'No temporary access found for this user'})
 
 async def create_verification_room(username, code):
     try:
@@ -275,11 +344,15 @@ async def verify(ctx, member: discord.Member = None, time_minutes: int = 0):
         expiry_time = time.time() + (time_minutes * 60)
         temp_access[str(member.id)] = expiry_time
         
-        await ctx.send(f"{member.mention} has been granted temporary access for {time_minutes} minutes.")
+        # Format the expiry time for display
+        expiry_datetime = datetime.fromtimestamp(expiry_time)
+        formatted_expiry = expiry_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        
+        await ctx.send(f"{member.mention} has been granted temporary access for {time_minutes} minutes.\nExpires at: {formatted_expiry}")
         
         # Send DM to the user
         try:
-            await member.send(f"You have been granted temporary access for {time_minutes} minutes.")
+            await member.send(f"You have been granted temporary access for {time_minutes} minutes.\nExpires at: {formatted_expiry}")
         except:
             await ctx.send("Could not send DM to the user, but temporary access has been granted.")
         
@@ -342,6 +415,59 @@ async def listverify(ctx):
         # Get the user from the channel name
         username = channel.name.replace("verify-", "")
         embed.add_field(name=channel.name, value=f"Created: {channel.created_at.strftime('%Y-%m-%d %H:%M')}", inline=False)
+    
+    await ctx.send(embed=embed)
+
+# NEW COMMAND: List all users with temporary access
+@bot.command()
+async def listtemp(ctx):
+    """Lists all users with temporary access."""
+    # Check if user has permission
+    if not ctx.author.guild_permissions.manage_roles:
+        await ctx.send("You need 'Manage Roles' permission to list temporary access.")
+        return
+    
+    if not temp_access:
+        await ctx.send("No users have temporary access.")
+        return
+    
+    # Create an embed with the list of users
+    embed = discord.Embed(
+        title="Temporary Access",
+        description=f"Total: {len(temp_access)} users",
+        color=discord.Color.gold()
+    )
+    
+    current_time = time.time()
+    
+    for user_id, expiry_time in temp_access.items():
+        # Get the user
+        user = None
+        for guild in bot.guilds:
+            user = guild.get_member(int(user_id))
+            if user:
+                break
+        
+        if not user:
+            continue
+        
+        # Calculate remaining time
+        remaining_seconds = expiry_time - current_time
+        if remaining_seconds <= 0:
+            status = "Expired"
+        else:
+            remaining_minutes = int(remaining_seconds / 60)
+            status = f"{remaining_minutes} minutes remaining"
+        
+        # Format expiry time
+        expiry_datetime = datetime.fromtimestamp(expiry_time)
+        formatted_expiry = expiry_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        
+        embed.add_field(
+            name=user.name,
+            value=f"Expires: {formatted_expiry}\nStatus: {status}",
+            inline=False
+        )
     
     await ctx.send(embed=embed)
 
