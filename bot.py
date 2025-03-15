@@ -3,6 +3,7 @@ import random
 import string
 import asyncio
 import os
+import time
 from flask import Flask, request, jsonify
 from threading import Thread
 import logging
@@ -11,8 +12,9 @@ from discord.ext import commands
 # Flask app setup
 app = Flask(__name__)
 
-# Store verification codes and bot configuration
+# Store verification codes, temporary access, and bot configuration
 verification_codes = {}
+temp_access = {}  # Store user IDs and expiration times
 bot_config = {
     "verification_category": None  # Will store the category ID
 }
@@ -44,8 +46,8 @@ def request_verification():
     code = generate_code()
     verification_codes[username] = code
     
-    # Schedule the DM to be sent
-    asyncio.run_coroutine_threadsafe(send_verification_dm(username, code), bot.loop)
+    # Schedule the verification room creation and code sending
+    asyncio.run_coroutine_threadsafe(create_verification_room(username, code), bot.loop)
     
     return jsonify({'success': True, 'message': 'Verification code sent'})
 
@@ -57,6 +59,16 @@ def verify_code():
     
     if not username or not code:
         return jsonify({'success': False, 'message': 'Username and code are required'}), 400
+    
+    # Check if user has temporary access
+    for user_id, expiry in temp_access.items():
+        user = None
+        for guild in bot.guilds:
+            user = guild.get_member(int(user_id))
+            if user and user.name.lower() == username.lower():
+                if time.time() < expiry:
+                    # User has temporary access
+                    return jsonify({'success': True, 'message': 'Verification successful (temporary access)'})
     
     stored_code = verification_codes.get(username)
     
@@ -70,7 +82,7 @@ def verify_code():
     else:
         return jsonify({'success': False, 'message': 'Invalid verification code'}), 400
 
-async def send_verification_dm(username, code):
+async def create_verification_room(username, code):
     try:
         user = None
         logger.info(f"Attempting to find user: {username}")
@@ -103,12 +115,56 @@ async def send_verification_dm(username, code):
             logger.error(f"Could not find user: {username}")
             return
         
-        # Send the DM
-        logger.info(f"Sending verification code to user: {user.name}")
-        await user.send(f"Your verification code is: **{code}**\nPlease enter this code in the application to complete verification.")
-        logger.info(f"Verification code sent to {username}")
+        # Check if verification category is set
+        if not bot_config["verification_category"]:
+            logger.error("Verification category not set")
+            await user.send("Error: Verification category not set. Please contact an administrator.")
+            return
+        
+        # Get the guild and category
+        guild = user.guild
+        category = guild.get_channel(bot_config["verification_category"])
+        
+        if not category:
+            logger.error("Verification category not found")
+            await user.send("Error: Verification category not found. Please contact an administrator.")
+            return
+        
+        # Create a private channel for the user
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        
+        # Check if a channel already exists for this user
+        existing_channel = discord.utils.get(category.channels, name=f"verify-{user.name.lower()}")
+        
+        if existing_channel:
+            channel = existing_channel
+            logger.info(f"Using existing verification channel for {user.name}")
+        else:
+            channel = await guild.create_text_channel(
+                name=f"verify-{user.name.lower()}",
+                category=category,
+                overwrites=overwrites
+            )
+            logger.info(f"Created verification channel for {user.name}")
+        
+        # Send the verification code in the channel
+        embed = discord.Embed(
+            title="Verification Code",
+            description=f"Your verification code is: **{code}**\nPlease enter this code in the application to complete verification.",
+            color=discord.Color.blue()
+        )
+        
+        await channel.send(f"Welcome {user.mention}!", embed=embed)
+        logger.info(f"Verification code sent to {username} in verification channel")
+        
     except Exception as e:
-        logger.error(f"Error sending DM to {username}: {e}")
+        logger.error(f"Error creating verification room for {username}: {e}")
+        if user:
+            await user.send(f"An error occurred: {str(e)}")
 
 # Run Flask in a separate thread
 def run_flask():
@@ -169,78 +225,93 @@ async def profile(ctx, member: discord.Member = None):
 
 # NEW COMMAND: Set Category for verification rooms
 @bot.command()
-async def setcategory(ctx, *, category_name: str = None):
-    """Sets the category for verification rooms. Usage: !setcategory Category Name"""
+async def setcategory(ctx, category_id: str = None):
+    """Sets the category for verification rooms. Usage: !setcategory <category_id>"""
     # Check if user has admin permissions
     if not ctx.author.guild_permissions.administrator:
         await ctx.send("You need administrator permissions to use this command.")
         return
     
-    if not category_name:
-        await ctx.send("Please provide a category name. Usage: `!setcategory Category Name`")
+    if not category_id:
+        await ctx.send("Please provide a category ID. Usage: `!setcategory <category_id>`")
         return
     
-    # Find the category or create it if it doesn't exist
-    category = discord.utils.get(ctx.guild.categories, name=category_name)
+    # Remove # if present (in case they use #category-id format)
+    category_id = category_id.replace('#', '').strip()
     
-    if not category:
-        try:
-            category = await ctx.guild.create_category(name=category_name)
-            await ctx.send(f"Category '{category_name}' created successfully!")
-        except discord.Forbidden:
-            await ctx.send("I don't have permission to create categories.")
-            return
-        except Exception as e:
-            await ctx.send(f"An error occurred: {str(e)}")
-            return
+    try:
+        # Try to convert to int
+        category_id = int(category_id)
+    except ValueError:
+        await ctx.send("Invalid category ID. Please provide a valid category ID.")
+        return
+    
+    # Find the category
+    category = ctx.guild.get_channel(category_id)
+    
+    if not category or category.type != discord.ChannelType.category:
+        await ctx.send("Category not found. Please provide a valid category ID.")
+        return
     
     # Store the category ID in the bot configuration
     bot_config["verification_category"] = category.id
-    await ctx.send(f"Verification category set to '{category_name}'")
+    await ctx.send(f"Verification category set to '{category.name}' (ID: {category.id})")
 
-# NEW COMMAND: Setup verification channel
+# NEW COMMAND: Verify a user without code or give temporary access
 @bot.command()
-async def setupverify(ctx):
-    """Creates a verification channel for new users."""
-    # Check if user has admin permissions
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("You need administrator permissions to use this command.")
-        return
-    
-    try:
-        # Create or find the verification channel
-        verify_channel = discord.utils.get(ctx.guild.text_channels, name="verification")
-        
-        if not verify_channel:
-            verify_channel = await ctx.guild.create_text_channel(name="verification")
-            await ctx.send("Created new verification channel.")
-        
-        # Send verification message
-        embed = discord.Embed(
-            title="Server Verification",
-            description="Welcome to the server! Please wait while we verify your account.",
-            color=discord.Color.green()
-        )
-        
-        await verify_channel.send(embed=embed)
-        await ctx.send("Verification channel has been set up!")
-        
-    except discord.Forbidden:
-        await ctx.send("I don't have permission to create channels.")
-    except Exception as e:
-        await ctx.send(f"An error occurred: {str(e)}")
-
-# NEW COMMAND: Verify a user and create a private room
-@bot.command()
-async def verify(ctx, member: discord.Member = None):
-    """Verifies a user and creates a private room. Usage: !verify @username"""
+async def verify(ctx, member: discord.Member = None, time_minutes: int = 0):
+    """Verifies a user without code or gives temporary access. Usage: !verify @user [time_in_minutes]"""
     # Check if user has permission to verify others
     if not ctx.author.guild_permissions.manage_roles:
         await ctx.send("You need 'Manage Roles' permission to verify users.")
         return
     
     if not member:
-        await ctx.send("Please mention a user to verify. Usage: `!verify @username`")
+        await ctx.send("Please mention a user to verify. Usage: `!verify @user [time_in_minutes]`")
+        return
+    
+    if time_minutes > 0:
+        # Give temporary access
+        expiry_time = time.time() + (time_minutes * 60)
+        temp_access[str(member.id)] = expiry_time
+        
+        await ctx.send(f"{member.mention} has been granted temporary access for {time_minutes} minutes.")
+        
+        # Send DM to the user
+        try:
+            await member.send(f"You have been granted temporary access for {time_minutes} minutes.")
+        except:
+            await ctx.send("Could not send DM to the user, but temporary access has been granted.")
+        
+        # Schedule removal of temporary access
+        async def remove_temp_access():
+            await asyncio.sleep(time_minutes * 60)
+            if str(member.id) in temp_access:
+                del temp_access[str(member.id)]
+                logger.info(f"Removed temporary access for {member.name}")
+                try:
+                    await member.send("Your temporary access has expired.")
+                except:
+                    pass
+        
+        asyncio.create_task(remove_temp_access())
+    else:
+        # Permanent verification - you could add a role here if needed
+        await ctx.send(f"{member.mention} has been verified permanently.")
+        
+        # Send DM to the user
+        try:
+            await member.send("You have been verified permanently.")
+        except:
+            await ctx.send("Could not send DM to the user, but verification has been completed.")
+
+# NEW COMMAND: List all verification channels
+@bot.command()
+async def listverify(ctx):
+    """Lists all verification channels."""
+    # Check if user has permission
+    if not ctx.author.guild_permissions.manage_channels:
+        await ctx.send("You need 'Manage Channels' permission to list verification channels.")
         return
     
     # Check if verification category is set
@@ -254,77 +325,25 @@ async def verify(ctx, member: discord.Member = None):
         await ctx.send("Verification category not found. Please use `!setcategory` again.")
         return
     
-    try:
-        # Create a private channel for the user
-        overwrites = {
-            ctx.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            ctx.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-        
-        channel_name = f"verify-{member.name.lower()}"
-        channel = await ctx.guild.create_text_channel(
-            name=channel_name,
-            category=category,
-            overwrites=overwrites
-        )
-        
-        # Send welcome message in the new channel
-        embed = discord.Embed(
-            title="Verification Room",
-            description=f"Welcome {member.mention}! This is your private verification room.",
-            color=discord.Color.blue()
-        )
-        
-        await channel.send(embed=embed)
-        await ctx.send(f"Created verification room for {member.mention}")
-        
-    except discord.Forbidden:
-        await ctx.send("I don't have permission to create channels.")
-    except Exception as e:
-        await ctx.send(f"An error occurred: {str(e)}")
-
-# Event handler for new members
-@bot.event
-async def on_member_join(member):
-    # Check if verification category is set
-    if not bot_config["verification_category"]:
-        logger.warning(f"Verification category not set when {member} joined")
+    # List all channels in the category
+    channels = category.channels
+    if not channels:
+        await ctx.send("No verification channels found.")
         return
     
-    # Get the category
-    category = member.guild.get_channel(bot_config["verification_category"])
-    if not category:
-        logger.warning(f"Verification category not found when {member} joined")
-        return
+    # Create an embed with the list of channels
+    embed = discord.Embed(
+        title="Verification Channels",
+        description=f"Total: {len(channels)} channels",
+        color=discord.Color.blue()
+    )
     
-    try:
-        # Create a private channel for the user
-        overwrites = {
-            member.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            member.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
-        
-        channel_name = f"verify-{member.name.lower()}"
-        channel = await member.guild.create_text_channel(
-            name=channel_name,
-            category=category,
-            overwrites=overwrites
-        )
-        
-        # Send welcome message in the new channel
-        embed = discord.Embed(
-            title="Verification Room",
-            description=f"Welcome {member.mention}! This is your private verification room.",
-            color=discord.Color.blue()
-        )
-        
-        await channel.send(embed=embed)
-        logger.info(f"Created verification room for new member {member}")
-        
-    except Exception as e:
-        logger.error(f"Error creating verification room for {member}: {e}")
+    for channel in channels:
+        # Get the user from the channel name
+        username = channel.name.replace("verify-", "")
+        embed.add_field(name=channel.name, value=f"Created: {channel.created_at.strftime('%Y-%m-%d %H:%M')}", inline=False)
+    
+    await ctx.send(embed=embed)
 
 if __name__ == '__main__':
     # Start Flask in a separate thread
