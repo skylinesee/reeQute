@@ -420,6 +420,59 @@ async def listverify(ctx):
 
 # NEW COMMAND: List all users with temporary access
 @bot.command()
+async def listtemp(ctx):
+    """Lists all users with temporary access."""
+    # Check if user has permission
+    if not ctx.author.guild_permissions.manage_roles:
+        await ctx.send("You need 'Manage Roles' permission to list temporary access.")
+        return
+    
+    if not temp_access:
+        await ctx.send("No users have temporary access.")
+        return
+    
+    # Create an embed with the list of users
+    embed = discord.Embed(
+        title="Temporary Access",
+        description=f"Total: {len(temp_access)} users",
+        color=discord.Color.gold()
+    )
+    
+    current_time = time.time()
+    
+    for user_id, expiry_time in temp_access.items():
+        # Get the user
+        user = None
+        for guild in bot.guilds:
+            user = guild.get_member(int(user_id))
+            if user:
+                break
+        
+        if not user:
+            continue
+        
+        # Calculate remaining time
+        remaining_seconds = expiry_time - current_time
+        if remaining_seconds <= 0:
+            status = "Expired"
+        else:
+            remaining_minutes = int(remaining_seconds / 60)
+            status = f"{remaining_minutes} minutes remaining"
+        
+        # Format expiry time
+        expiry_datetime = datetime.fromtimestamp(expiry_time)
+        formatted_expiry = expiry_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        
+        embed.add_field(
+            name=user.name,
+            value=f"Expires: {formatted_expiry}\nStatus: {status}",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+# NEW COMMAND: Remove a user from verification list
+@bot.command()
 async def removeverify(ctx, member: discord.Member = None):
     """Removes a user from the verification list and deletes their channel. Usage: !removeverify @user"""
     # Check if user has permission
@@ -524,8 +577,9 @@ async def clearverify(ctx):
             await ctx.send(f"Error deleting channel {channel.name}: {str(e)}")
     
     # Clear all verification codes and temporary access
-    verification_codes.clear()
-    temp_access.clear()
+    global verification_codes, temp_access
+    verification_codes = {}
+    temp_access = {}
     
     await ctx.send(f"Verification data cleared. Deleted {deleted_count} channels.")
 
