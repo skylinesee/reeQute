@@ -61,34 +61,7 @@ def verify_code():
     if not username or not code:
         return jsonify({'success': False, 'message': 'Username and code are required'}), 400
     
-    # Check if user has temporary access
-    user_id = None
-    expiry_time = None
-    
-    # Find the user ID based on username
-    for guild in bot.guilds:
-        for member in guild.members:
-            if member.name.lower() == username.lower():
-                user_id = str(member.id)
-                break
-        if user_id:
-            break
-    
-    # Check if user has temporary access
-    if user_id and user_id in temp_access:
-        expiry_time = temp_access[user_id]
-        if time.time() < expiry_time:
-            # User has temporary access
-            # Calculate remaining time in minutes
-            remaining_minutes = int((expiry_time - time.time()) / 60)
-            
-            return jsonify({
-                'success': True, 
-                'message': 'Verification successful (temporary access)',
-                'temporary': True,
-                'expiresIn': remaining_minutes,
-                'expiryTimestamp': expiry_time
-            })
+
     
     # Check regular verification code
     stored_code = verification_codes.get(username)
@@ -107,49 +80,7 @@ def verify_code():
     else:
         return jsonify({'success': False, 'message': 'Invalid verification code'}), 400
 
-# New endpoint to check temporary access status
-@app.route('/api/verification/check-status', methods=['POST'])
-def check_status():
-    data = request.json
-    username = data.get('discordUsername')
-    
-    if not username:
-        return jsonify({'success': False, 'message': 'Discord username is required'}), 400
-    
-    # Find the user ID based on username
-    user_id = None
-    for guild in bot.guilds:
-        for member in guild.members:
-            if member.name.lower() == username.lower():
-                user_id = str(member.id)
-                break
-        if user_id:
-            break
-    
-    if not user_id:
-        return jsonify({'success': False, 'message': 'User not found'}), 404
-    
-    # Check if user has temporary access
-    if user_id in temp_access:
-        expiry_time = temp_access[user_id]
-        if time.time() < expiry_time:
-            # User has temporary access
-            # Calculate remaining time in minutes
-            remaining_minutes = int((expiry_time - time.time()) / 60)
-            
-            return jsonify({
-                'success': True, 
-                'message': 'User has temporary access',
-                'temporary': True,
-                'expiresIn': remaining_minutes,
-                'expiryTimestamp': expiry_time
-            })
-        else:
-            # Temporary access has expired
-            del temp_access[user_id]
-            return jsonify({'success': False, 'message': 'Temporary access has expired'})
-    
-    return jsonify({'success': False, 'message': 'No temporary access found for this user'})
+
 
 async def create_verification_room(username, code):
     try:
@@ -327,56 +258,8 @@ async def setcategory(ctx, category_id: str = None):
     await ctx.send(f"Verification category set to '{category.name}' (ID: {category.id})")
 
 # NEW COMMAND: Verify a user without code or give temporary access
-@bot.command()
-async def verify(ctx, member: discord.Member = None, time_minutes: int = 0):
-    """Verifies a user without code or gives temporary access. Usage: !verify @user [time_in_minutes]"""
-    # Check if user has permission to verify others
-    if not ctx.author.guild_permissions.manage_roles:
-        await ctx.send("You need 'Manage Roles' permission to verify users.")
-        return
-    
-    if not member:
-        await ctx.send("Please mention a user to verify. Usage: `!verify @user [time_in_minutes]`")
-        return
-    
-    if time_minutes > 0:
-        # Give temporary access
-        expiry_time = time.time() + (time_minutes * 60)
-        temp_access[str(member.id)] = expiry_time
-        
-        # Format the expiry time for display
-        expiry_datetime = datetime.fromtimestamp(expiry_time)
-        formatted_expiry = expiry_datetime.strftime("%Y-%m-%d %H:%M:%S")
-        
-        await ctx.send(f"{member.mention} has been granted temporary access for {time_minutes} minutes.\nExpires at: {formatted_expiry}")
-        
-        # Send DM to the user
-        try:
-            await member.send(f"You have been granted temporary access for {time_minutes} minutes.\nExpires at: {formatted_expiry}")
-        except:
-            await ctx.send("Could not send DM to the user, but temporary access has been granted.")
-        
-        # Schedule removal of temporary access
-        async def remove_temp_access():
-            await asyncio.sleep(time_minutes * 60)
-            if str(member.id) in temp_access:
-                del temp_access[str(member.id)]
-                logger.info(f"Removed temporary access for {member.name}")
-                try:
-                    await member.send("Your temporary access has expired.")
-                except:
-                    pass
-        
-        asyncio.create_task(remove_temp_access())
-    else:
-        # Permanent verification - you could add a role here if needed
-        await ctx.send(f"{member.mention} has been verified permanently.")
-        
-        # Send DM to the user
-        try:
-            await member.send("You have been verified permanently.")
-        except:
-            await ctx.send("Could not send DM to the user, but verification has been completed.")
+
+
 
 # NEW COMMAND: List all verification channels
 @bot.command()
@@ -418,93 +301,14 @@ async def listverify(ctx):
     
     await ctx.send(embed=embed)
 
-# NEW COMMAND: List all users with temporary access
-@bot.command()
-async def listtemp(ctx):
-    """Lists all users with temporary access."""
-    # Check if user has permission
-    if not ctx.author.guild_permissions.manage_roles:
-        await ctx.send("You need 'Manage Roles' permission to list temporary access.")
-        return
-    
-    if not temp_access:
-        await ctx.send("No users have temporary access.")
-        return
-    
-    # Create an embed with the list of users
-    embed = discord.Embed(
-        title="Temporary Access",
-        description=f"Total: {len(temp_access)} users",
-        color=discord.Color.gold()
-    )
-    
-    current_time = time.time()
-    
-    for user_id, expiry_time in temp_access.items():
-        # Get the user
-        user = None
-        for guild in bot.guilds:
-            user = guild.get_member(int(user_id))
-            if user:
-                break
-        
-        if not user:
-            continue
-        
-        # Calculate remaining time
-        remaining_seconds = expiry_time - current_time
-        if remaining_seconds <= 0:
-            status = "Expired"
-        else:
-            remaining_minutes = int(remaining_seconds / 60)
-            status = f"{remaining_minutes} minutes remaining"
-        
-        # Format expiry time
-        expiry_datetime = datetime.fromtimestamp(expiry_time)
-        formatted_expiry = expiry_datetime.strftime("%Y-%m-%d %H:%M:%S")
-        
-        embed.add_field(
-            name=user.name,
-            value=f"Expires: {formatted_expiry}\nStatus: {status}",
-            inline=False
-        )
-    
-    await ctx.send(embed=embed)
 
-# NEW COMMAND: Remove a user from verification list
-@bot.command()
-async def removeverify(ctx, member: discord.Member = None):
-    """Removes a user from the verification list and deletes their channel. Usage: !removeverify @user"""
-    # Check if user has permission
-    if not ctx.author.guild_permissions.manage_roles:
-        await ctx.send("You need 'Manage Roles' permission to remove users from verification.")
-        return
-    
-    if not member:
-        await ctx.send("Please mention a user to remove. Usage: `!removeverify @user`")
-        return
-    
-    # Check if verification category is set
-    if not bot_config["verification_category"]:
-        await ctx.send("Verification category not set. Please use `!setcategory` first.")
-        return
-    
-    # Get the category
-    category = ctx.guild.get_channel(bot_config["verification_category"])
-    if not category:
-        await ctx.send("Verification category not found. Please use `!setcategory` again.")
-        return
     
     # Find the user's verification channel
     channel_name = f"verify-{member.name.lower()}"
     channel = discord.utils.get(category.channels, name=channel_name)
     
     # Remove from temporary access if present
-    removed_temp = False
-    if str(member.id) in temp_access:
-        del temp_access[str(member.id)]
-        removed_temp = True
-    
+
     # Remove from verification codes if present
     removed_code = False
     for username, code in list(verification_codes.items()):
@@ -576,10 +380,7 @@ async def clearverify(ctx):
         except Exception as e:
             await ctx.send(f"Error deleting channel {channel.name}: {str(e)}")
     
-    # Clear all verification codes and temporary access
-    global verification_codes, temp_access
-    verification_codes = {}
-    temp_access = {}
+
     
     await ctx.send(f"Verification data cleared. Deleted {deleted_count} channels.")
 
