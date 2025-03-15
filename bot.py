@@ -11,8 +11,11 @@ from discord.ext import commands
 # Flask app setup
 app = Flask(__name__)
 
-# Store verification codes
+# Store verification codes and bot configuration
 verification_codes = {}
+bot_config = {
+    "verification_category": None  # Will store the category ID
+}
 
 # Generate a random verification code
 def generate_code(length=6):
@@ -27,10 +30,6 @@ intents = discord.Intents.default()
 intents.message_content = True  # Privileged intent
 intents.members = True          # Privileged intent - needed to access guild members
 bot = commands.Bot(command_prefix='!', intents=intents)
-
-
-
-
 
 # Flask API endpoints
 @app.route('/api/verification/request', methods=['POST'])
@@ -115,7 +114,7 @@ async def send_verification_dm(username, code):
 def run_flask():
     app.run(host='0.0.0.0', port=5000)
 
-# Botun varsayılan yardım komutunu değiştirme
+# Custom help command
 class MyHelpCommand(commands.DefaultHelpCommand):
     async def send_bot_help(self, mapping):
         # Show main commands
@@ -168,6 +167,164 @@ async def profile(ctx, member: discord.Member = None):
     member = member or ctx.author  # Use the provided member or the command author
     await ctx.send(member.avatar.url)
 
+# NEW COMMAND: Set Category for verification rooms
+@bot.command()
+async def setcategory(ctx, *, category_name: str = None):
+    """Sets the category for verification rooms. Usage: !setcategory Category Name"""
+    # Check if user has admin permissions
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("You need administrator permissions to use this command.")
+        return
+    
+    if not category_name:
+        await ctx.send("Please provide a category name. Usage: `!setcategory Category Name`")
+        return
+    
+    # Find the category or create it if it doesn't exist
+    category = discord.utils.get(ctx.guild.categories, name=category_name)
+    
+    if not category:
+        try:
+            category = await ctx.guild.create_category(name=category_name)
+            await ctx.send(f"Category '{category_name}' created successfully!")
+        except discord.Forbidden:
+            await ctx.send("I don't have permission to create categories.")
+            return
+        except Exception as e:
+            await ctx.send(f"An error occurred: {str(e)}")
+            return
+    
+    # Store the category ID in the bot configuration
+    bot_config["verification_category"] = category.id
+    await ctx.send(f"Verification category set to '{category_name}'")
+
+# NEW COMMAND: Setup verification channel
+@bot.command()
+async def setupverify(ctx):
+    """Creates a verification channel for new users."""
+    # Check if user has admin permissions
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("You need administrator permissions to use this command.")
+        return
+    
+    try:
+        # Create or find the verification channel
+        verify_channel = discord.utils.get(ctx.guild.text_channels, name="verification")
+        
+        if not verify_channel:
+            verify_channel = await ctx.guild.create_text_channel(name="verification")
+            await ctx.send("Created new verification channel.")
+        
+        # Send verification message
+        embed = discord.Embed(
+            title="Server Verification",
+            description="Welcome to the server! Please wait while we verify your account.",
+            color=discord.Color.green()
+        )
+        
+        await verify_channel.send(embed=embed)
+        await ctx.send("Verification channel has been set up!")
+        
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to create channels.")
+    except Exception as e:
+        await ctx.send(f"An error occurred: {str(e)}")
+
+# NEW COMMAND: Verify a user and create a private room
+@bot.command()
+async def verify(ctx, member: discord.Member = None):
+    """Verifies a user and creates a private room. Usage: !verify @username"""
+    # Check if user has permission to verify others
+    if not ctx.author.guild_permissions.manage_roles:
+        await ctx.send("You need 'Manage Roles' permission to verify users.")
+        return
+    
+    if not member:
+        await ctx.send("Please mention a user to verify. Usage: `!verify @username`")
+        return
+    
+    # Check if verification category is set
+    if not bot_config["verification_category"]:
+        await ctx.send("Verification category not set. Please use `!setcategory` first.")
+        return
+    
+    # Get the category
+    category = ctx.guild.get_channel(bot_config["verification_category"])
+    if not category:
+        await ctx.send("Verification category not found. Please use `!setcategory` again.")
+        return
+    
+    try:
+        # Create a private channel for the user
+        overwrites = {
+            ctx.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            ctx.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        
+        channel_name = f"verify-{member.name.lower()}"
+        channel = await ctx.guild.create_text_channel(
+            name=channel_name,
+            category=category,
+            overwrites=overwrites
+        )
+        
+        # Send welcome message in the new channel
+        embed = discord.Embed(
+            title="Verification Room",
+            description=f"Welcome {member.mention}! This is your private verification room.",
+            color=discord.Color.blue()
+        )
+        
+        await channel.send(embed=embed)
+        await ctx.send(f"Created verification room for {member.mention}")
+        
+    except discord.Forbidden:
+        await ctx.send("I don't have permission to create channels.")
+    except Exception as e:
+        await ctx.send(f"An error occurred: {str(e)}")
+
+# Event handler for new members
+@bot.event
+async def on_member_join(member):
+    # Check if verification category is set
+    if not bot_config["verification_category"]:
+        logger.warning(f"Verification category not set when {member} joined")
+        return
+    
+    # Get the category
+    category = member.guild.get_channel(bot_config["verification_category"])
+    if not category:
+        logger.warning(f"Verification category not found when {member} joined")
+        return
+    
+    try:
+        # Create a private channel for the user
+        overwrites = {
+            member.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            member.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        
+        channel_name = f"verify-{member.name.lower()}"
+        channel = await member.guild.create_text_channel(
+            name=channel_name,
+            category=category,
+            overwrites=overwrites
+        )
+        
+        # Send welcome message in the new channel
+        embed = discord.Embed(
+            title="Verification Room",
+            description=f"Welcome {member.mention}! This is your private verification room.",
+            color=discord.Color.blue()
+        )
+        
+        await channel.send(embed=embed)
+        logger.info(f"Created verification room for new member {member}")
+        
+    except Exception as e:
+        logger.error(f"Error creating verification room for {member}: {e}")
 
 if __name__ == '__main__':
     # Start Flask in a separate thread
